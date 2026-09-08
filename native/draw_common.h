@@ -8,7 +8,11 @@ extern float g_vertices[];
 extern uint32_t g_vertex_count;
 extern VkExtent2D g_swapchain_ext;
 
+#ifdef _WIN32
 #define MAX_VERTICES 1048576
+#else
+#define MAX_VERTICES 4194304
+#endif
 
 static inline void ToNDC(float px, float py, float *nx, float *ny) {
     *nx = (px / (float)g_swapchain_ext.width) * 2.0f - 1.0f;
