@@ -36,22 +36,44 @@
 void Mac_FreeReadbackBuffer(void);
 
 // ── Shape pools (identical layout to platform.c) ────────────────────────
-static ManimRect g_rects[MAX_SHAPES];
-static int g_rect_count = 0;
-static ManimCircle g_circles[MAX_SHAPES];
-static int g_circle_count = 0;
-static LineObj g_lines[MAX_SHAPES];
-static int g_line_count = 0;
-static EllipseObj g_ellipses[MAX_SHAPES];
-static int g_ellipse_count = 0;
+// X-macro table: each row = (type, pool, count, CMD tag, add-fn name,
+// signature params, struct-literal init).  Expanding the table with the
+// DECL_POOL / ADD_FN / RESET_POOL macros below regenerates identifiers
+// byte-identical to platform.c (g_rects, g_rect_count, AddRect, ...) —
+// nothing is renamed, only deduplicated.
+#define FOR_EACH_SHAPE(X)                                                        \
+    X(ManimRect,   g_rects,        g_rect_count,        CMD_RECT,        AddRect,        \
+      (float x, float y, float hw, float hh, float rot, int r, int g, int b, int border_r, int border_g, int border_b, float border_width, float stroke_progress, float alpha), \
+      (x, y, hw, hh, rot, r, g, b, border_r, border_g, border_b, border_width, stroke_progress, alpha)) \
+    X(ManimCircle, g_circles,      g_circle_count,      CMD_CIRCLE,      AddCircle,      \
+      (float x, float y, float radius, int r, int g, int b, int border_r, int border_g, int border_b, float border_width, float stroke_progress, float alpha), \
+      (x, y, radius, r, g, b, border_r, border_g, border_b, border_width, stroke_progress, alpha)) \
+    X(LineObj,     g_lines,        g_line_count,        CMD_LINE,        AddLine,        \
+      (float x1, float y1, float x2, float y2, int width, int r, int g, int b, float alpha), \
+      (x1, y1, x2, y2, width, r, g, b, alpha)) \
+    X(EllipseObj,  g_ellipses,     g_ellipse_count,     CMD_ELLIPSE,     AddEllipse,     \
+      (float x, float y, float rx, float ry, int r, int g, int b, int border_r, int border_g, int border_b, float border_width, float stroke_progress, float alpha), \
+      (x, y, rx, ry, r, g, b, border_r, border_g, border_b, border_width, stroke_progress, alpha)) \
+    X(DashedLineObj, g_dashed_lines, g_dashed_line_count, CMD_DASHED_LINE, AddDashedLine, \
+      (float x1, float y1, float x2, float y2, int width, int r, int g, int b, float dash_length, float gap_length, float alpha), \
+      (x1, y1, x2, y2, width, r, g, b, dash_length, gap_length, alpha)) \
+    X(ArcObj,      g_arcs,         g_arc_count,         CMD_ARC,         AddArc,         \
+      (float x, float y, float radius, float start_angle, float angle, int r, int g, int b, float stroke_width, float alpha), \
+      (x, y, radius, start_angle, angle, r, g, b, stroke_width, alpha)) \
+    X(PointObj,    g_points,       g_point_count,       CMD_POINT,       AddPoint,       \
+      (float x, float y, int r, int g, int b, float alpha), \
+      (x, y, r, g, b, alpha))
+
+#define DECL_POOL(type, pool, count, cmd, ...) \
+    static type pool[MAX_SHAPES];              \
+    static int count = 0;
+FOR_EACH_SHAPE(DECL_POOL)
+#undef DECL_POOL
+
+// Polygon and Text adders need non-uniform bodies (vertex memcpy / string
+// copy), so only their pools are declared here; the functions are below.
 static PolygonObj g_polygons[MAX_SHAPES];
 static int g_polygon_count = 0;
-static DashedLineObj g_dashed_lines[MAX_SHAPES];
-static int g_dashed_line_count = 0;
-static ArcObj g_arcs[MAX_SHAPES];
-static int g_arc_count = 0;
-static PointObj g_points[MAX_SHAPES];
-static int g_point_count = 0;
 static TextObj g_texts[MAX_SHAPES];
 static int g_text_count = 0;
 
@@ -60,7 +82,6 @@ static DrawCmd g_draw_cmds[MAX_DRAW_CMDS];
 static int g_draw_cmd_count = 0;
 
 // ── Cocoa state ─────────────────────────────────────────────────────────
-static NSApplication *g_app = nil;
 static NSWindow *g_window = nil;
 static NSView *g_view = nil;
 static CAMetalLayer *g_layer = nil;
@@ -235,38 +256,22 @@ void Vulkan_Shutdown(void) {
 }
 
 // ── Shape adders (identical logic to platform.c) ────────────────────────
-
-void AddRect(float x, float y, float hw, float hh, float rot, int r, int g, int b, int border_r, int border_g, int border_b, float border_width, float stroke_progress, float alpha) {
-    if (g_rect_count < MAX_SHAPES && g_draw_cmd_count < MAX_DRAW_CMDS) {
-        g_rects[g_rect_count] = (ManimRect){ x, y, hw, hh, rot, r, g, b, border_r, border_g, border_b, border_width, stroke_progress, alpha };
-        g_draw_cmds[g_draw_cmd_count++] = (DrawCmd){ CMD_RECT, g_rect_count };
-        g_rect_count++;
+// Seven shapes share one pattern: bounds-check → store struct → push draw
+// command → bump count.  Generated from FOR_EACH_SHAPE; the function names,
+// signatures, and bodies are byte-equivalent to the hand-written
+// platform.c versions.
+#define UNPAREN(...) __VA_ARGS__
+#define ADD_FN(type, pool, count, cmd, name, params, init)             \
+    void name params {                                                 \
+        if (count < MAX_SHAPES && g_draw_cmd_count < MAX_DRAW_CMDS) {  \
+            pool[count] = (type){ UNPAREN init };                      \
+            g_draw_cmds[g_draw_cmd_count++] = (DrawCmd){ cmd, count }; \
+            count++;                                                   \
+        }                                                              \
     }
-}
-
-void AddCircle(float x, float y, float radius, int r, int g, int b, int border_r, int border_g, int border_b, float border_width, float stroke_progress, float alpha) {
-    if (g_circle_count < MAX_SHAPES && g_draw_cmd_count < MAX_DRAW_CMDS) {
-        g_circles[g_circle_count] = (ManimCircle){ x, y, radius, r, g, b, border_r, border_g, border_b, border_width, stroke_progress, alpha };
-        g_draw_cmds[g_draw_cmd_count++] = (DrawCmd){ CMD_CIRCLE, g_circle_count };
-        g_circle_count++;
-    }
-}
-
-void AddLine(float x1, float y1, float x2, float y2, int width, int r, int g, int b, float alpha) {
-    if (g_line_count < MAX_SHAPES && g_draw_cmd_count < MAX_DRAW_CMDS) {
-        g_lines[g_line_count] = (LineObj){ x1, y1, x2, y2, width, r, g, b, alpha };
-        g_draw_cmds[g_draw_cmd_count++] = (DrawCmd){ CMD_LINE, g_line_count };
-        g_line_count++;
-    }
-}
-
-void AddEllipse(float x, float y, float rx, float ry, int r, int g, int b, int border_r, int border_g, int border_b, float border_width, float stroke_progress, float alpha) {
-    if (g_ellipse_count < MAX_SHAPES && g_draw_cmd_count < MAX_DRAW_CMDS) {
-        g_ellipses[g_ellipse_count] = (EllipseObj){ x, y, rx, ry, r, g, b, border_r, border_g, border_b, border_width, stroke_progress, alpha };
-        g_draw_cmds[g_draw_cmd_count++] = (DrawCmd){ CMD_ELLIPSE, g_ellipse_count };
-        g_ellipse_count++;
-    }
-}
+FOR_EACH_SHAPE(ADD_FN)
+#undef ADD_FN
+#undef UNPAREN
 
 void AddPolygon(float x, float y, int r, int g, int b, int border_r, int border_g, int border_b, float border_width, int vert_count, const float* verts, float stroke_progress, float alpha, int close_path) {
     if (g_polygon_count < MAX_SHAPES && g_draw_cmd_count < MAX_DRAW_CMDS && vert_count <= MAX_POLYGON_VERTS) {
@@ -282,30 +287,6 @@ void AddPolygon(float x, float y, int r, int g, int b, int border_r, int border_
         memcpy(p->verts, verts, sizeof(float) * vert_count * 2);
         g_draw_cmds[g_draw_cmd_count++] = (DrawCmd){ CMD_POLYGON, g_polygon_count };
         g_polygon_count++;
-    }
-}
-
-void AddDashedLine(float x1, float y1, float x2, float y2, int width, int r, int g, int b, float dash_length, float gap_length, float alpha) {
-    if (g_dashed_line_count < MAX_SHAPES && g_draw_cmd_count < MAX_DRAW_CMDS) {
-        g_dashed_lines[g_dashed_line_count] = (DashedLineObj){ x1, y1, x2, y2, width, r, g, b, dash_length, gap_length, alpha };
-        g_draw_cmds[g_draw_cmd_count++] = (DrawCmd){ CMD_DASHED_LINE, g_dashed_line_count };
-        g_dashed_line_count++;
-    }
-}
-
-void AddArc(float x, float y, float radius, float start_angle, float angle, int r, int g, int b, float stroke_width, float alpha) {
-    if (g_arc_count < MAX_SHAPES && g_draw_cmd_count < MAX_DRAW_CMDS) {
-        g_arcs[g_arc_count] = (ArcObj){ x, y, radius, start_angle, angle, r, g, b, stroke_width, alpha };
-        g_draw_cmds[g_draw_cmd_count++] = (DrawCmd){ CMD_ARC, g_arc_count };
-        g_arc_count++;
-    }
-}
-
-void AddPoint(float x, float y, int r, int g, int b, float alpha) {
-    if (g_point_count < MAX_SHAPES && g_draw_cmd_count < MAX_DRAW_CMDS) {
-        g_points[g_point_count] = (PointObj){ x, y, r, g, b, alpha };
-        g_draw_cmds[g_draw_cmd_count++] = (DrawCmd){ CMD_POINT, g_point_count };
-        g_point_count++;
     }
 }
 
@@ -328,18 +309,17 @@ void AddText(float x, float y, int r, int g, int b, float font_size, float opaci
     }
 }
 
+#define RESET_POOL(type, pool, count, cmd, ...) count = 0;
+
 void ClearShapes(void) {
-    g_rect_count = 0;
-    g_circle_count = 0;
-    g_line_count = 0;
-    g_ellipse_count = 0;
+    FOR_EACH_SHAPE(RESET_POOL)
     g_polygon_count = 0;
-    g_dashed_line_count = 0;
-    g_arc_count = 0;
-    g_point_count = 0;
     g_text_count = 0;
     g_draw_cmd_count = 0;
 }
+
+#undef RESET_POOL
+#undef FOR_EACH_SHAPE
 
 // ── Framebuffer readback (two-phase, MoltenVK-safe) ─────────────────────
 //
@@ -550,21 +530,4 @@ int SaveScreenshot(const char *path) {
     int ok = WriteBMP(path, w, h, bgr);
     free(bgr);
     return ok;
-}
-
-int SaveScreenshotRaw(unsigned char *out, int *out_size) {
-    if (!g_is_ready || !g_swapchain || !out) return 0;
-    if (g_readback_buf == VK_NULL_HANDLE) return 0;
-
-    int w = 0, h = 0;
-    unsigned char *bgr = NULL;
-    if (!ReadbackFrame(&bgr, &w, &h)) {
-        g_readback_requested = 1;
-        return 0;
-    }
-    int rowBytes = ((w * 3 + 3) & ~3);
-    memcpy(out, bgr, (size_t)rowBytes * (size_t)h);
-    free(bgr);
-    if (out_size) *out_size = rowBytes * h;
-    return 1;
 }
