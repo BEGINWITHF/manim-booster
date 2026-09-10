@@ -7,7 +7,8 @@ venv/
 .pytest_cache/
 
 # ---- Build artifacts (compiled) ----
-# NOTE: build/ and dist/ are intentionally kept and tracked in this repo.
+build/
+dist/
 
 # ---- PyPI packaging outputs (regenerable via `python -m build`) ----
 dist/*.whl
